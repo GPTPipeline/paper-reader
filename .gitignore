@@ -1,0 +1,42 @@
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+downloaded_papers.json
+fetch.log
+fetch_error.log
+papers/
+
+# Secrets and local overrides
+.env
+.env.*
+*.pem
+*.key
+config.local.yaml
+
+# Local assistant/tool state
+.gemini/
+
+# macOS launchd files generated for a local machine
+*.plist
+
+# Node/Electron
+ui/node_modules/
+ui/dist/
+ui/.npm_cache/
+ui/.vite/
+ui/out/
+ui/release/

@@ -1,0 +1,9 @@
+keywords:
+  - "agentic systems"
+  - "AI agents"
+  - "autonomous agents"
+  - "multi-agent systems"
+  - "LLM agents"
+max_results: 10
+download_dir: "../papers"
+log_file: "downloaded_papers.json"
