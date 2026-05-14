@@ -26,7 +26,12 @@ def migrate():
             local_path TEXT,
             source TEXT,
             downloaded_at TEXT,
-            status TEXT DEFAULT 'UNREAD'
+            status TEXT DEFAULT 'UNREAD',
+            category TEXT,
+            tags TEXT DEFAULT '[]',
+            notebook_status TEXT DEFAULT 'NOT_ADDED',
+            last_opened_at TEXT,
+            notes TEXT
         )
     ''')
 
@@ -40,8 +45,8 @@ def migrate():
         try:
             cursor.execute('''
                 INSERT OR IGNORE INTO papers 
-                (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, status, category, tags, notebook_status, last_opened_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 paper_id,
                 info.get('title'),
@@ -52,7 +57,12 @@ def migrate():
                 info.get('local_path'),
                 info.get('source'),
                 info.get('downloaded_at'),
-                info.get('status', 'UNREAD')
+                info.get('status', 'UNREAD'),
+                info.get('category'),
+                json.dumps(info.get('tags', [])),
+                info.get('notebook_status', 'NOT_ADDED'),
+                info.get('last_opened_at'),
+                info.get('notes')
             ))
             count += 1
         except Exception as e:

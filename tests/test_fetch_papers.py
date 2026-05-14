@@ -22,7 +22,12 @@ class TestFetchPapers(unittest.TestCase):
                 local_path TEXT,
                 source TEXT,
                 downloaded_at TEXT,
-                status TEXT DEFAULT 'UNREAD'
+                status TEXT DEFAULT 'UNREAD',
+                category TEXT,
+                tags TEXT DEFAULT '[]',
+                notebook_status TEXT DEFAULT 'NOT_ADDED',
+                last_opened_at TEXT,
+                notes TEXT
             )
         ''')
         self.conn.commit()
@@ -47,6 +52,8 @@ class TestFetchPapers(unittest.TestCase):
             "pdf_url": "http://example.com/test.pdf",
             "local_path": "/path/to/test.pdf",
             "source": "arxiv",
+            "category": "cs.AI",
+            "tags": ["agent"],
             "downloaded_at": "2023-01-02"
         }
         fetch_papers.save_paper_to_db(self.conn, "test_id", info)
@@ -59,6 +66,9 @@ class TestFetchPapers(unittest.TestCase):
         self.assertEqual(row['title'], "Test Title")
         self.assertEqual(json.loads(row['authors']), ["Author A", "Author B"])
         self.assertEqual(row['status'], "UNREAD")
+        self.assertEqual(row['category'], "cs.AI")
+        self.assertEqual(json.loads(row['tags']), ["agent"])
+        self.assertEqual(row['notebook_status'], "NOT_ADDED")
 
     @patch('fetch_papers.requests.get')
     def test_fetch_hf_daily_papers_success(self, mock_get):
@@ -90,6 +100,7 @@ class TestFetchPapers(unittest.TestCase):
         mock_result.published = datetime(2023, 1, 1)
         mock_result.summary = "Summary"
         mock_result.pdf_url = "http://arxiv.org/pdf/2301.12345v1"
+        mock_result.primary_category = "cs.AI"
         
         mock_client_instance = mock_arxiv_client.return_value
         mock_client_instance.results.return_value = [mock_result]
@@ -109,9 +120,10 @@ class TestFetchPapers(unittest.TestCase):
         self.assertIn('2301.12345v1', existing_ids)
         
         cursor = self.conn.cursor()
-        cursor.execute("SELECT title FROM papers WHERE id='2301.12345v1'")
+        cursor.execute("SELECT title, category FROM papers WHERE id='2301.12345v1'")
         row = cursor.fetchone()
         self.assertEqual(row['title'], "Arxiv Paper Title")
+        self.assertEqual(row['category'], "cs.AI")
 
 from datetime import datetime
 if __name__ == '__main__':

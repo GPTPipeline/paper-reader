@@ -2,9 +2,44 @@ const { app, BrowserWindow, ipcMain, shell, nativeImage, nativeTheme } = require
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const { pathToFileURL } = require('url');
 
 const dbPath = path.join(__dirname, '..', 'papers.db');
 const db = new Database(dbPath);
+
+function ensureSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS papers (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      authors TEXT,
+      published TEXT,
+      summary TEXT,
+      pdf_url TEXT,
+      local_path TEXT,
+      source TEXT,
+      downloaded_at TEXT,
+      status TEXT DEFAULT 'UNREAD'
+    )
+  `);
+
+  const columns = new Set(db.prepare('PRAGMA table_info(papers)').all().map((column) => column.name));
+  const additions = [
+    ['category', 'TEXT'],
+    ['tags', 'TEXT DEFAULT \'[]\''],
+    ['notebook_status', 'TEXT DEFAULT \'NOT_ADDED\''],
+    ['last_opened_at', 'TEXT'],
+    ['notes', 'TEXT'],
+  ];
+
+  additions.forEach(([name, definition]) => {
+    if (!columns.has(name)) {
+      db.exec(`ALTER TABLE papers ADD COLUMN ${name} ${definition}`);
+    }
+  });
+}
+
+ensureSchema();
 
 function createWindow() {
   nativeTheme.themeSource = 'dark';
@@ -67,6 +102,18 @@ ipcMain.handle('update-paper-status', async (event, { id, status }) => {
   return result.changes > 0;
 });
 
+ipcMain.handle('update-notebook-status', async (event, { id, status }) => {
+  const stmt = db.prepare('UPDATE papers SET notebook_status = ? WHERE id = ?');
+  const result = stmt.run(status, id);
+  return result.changes > 0;
+});
+
+ipcMain.handle('update-last-opened', async (event, { id }) => {
+  const stmt = db.prepare('UPDATE papers SET last_opened_at = ? WHERE id = ?');
+  const result = stmt.run(new Date().toISOString(), id);
+  return result.changes > 0;
+});
+
 ipcMain.on('start-drag', async (event, { pdfPath, title }) => {
   const absolutePath = getPdfAbsolutePath(pdfPath);
   console.log('Main Process: Handling start-drag for:', absolutePath);
@@ -102,4 +149,12 @@ ipcMain.handle('open-notebook', async (event, { pdfPath }) => {
   if (absolutePath && fs.existsSync(absolutePath)) {
     shell.showItemInFolder(absolutePath);
   }
+});
+
+ipcMain.handle('get-pdf-preview', async (event, { pdfPath }) => {
+  const absolutePath = getPdfAbsolutePath(pdfPath);
+  if (!absolutePath || !fs.existsSync(absolutePath)) {
+    return { ok: false, error: 'PDF file not found.' };
+  }
+  return { ok: true, url: pathToFileURL(absolutePath).toString() };
 });

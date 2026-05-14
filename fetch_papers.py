@@ -17,7 +17,38 @@ def get_db_connection():
     db_path = os.path.join(script_dir, "papers.db")
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    ensure_schema(conn)
     return conn
+
+def ensure_schema(conn):
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS papers (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            authors TEXT,
+            published TEXT,
+            summary TEXT,
+            pdf_url TEXT,
+            local_path TEXT,
+            source TEXT,
+            downloaded_at TEXT,
+            status TEXT DEFAULT 'UNREAD'
+        )
+    ''')
+    cursor.execute("PRAGMA table_info(papers)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    additions = {
+        "category": "TEXT",
+        "tags": "TEXT DEFAULT '[]'",
+        "notebook_status": "TEXT DEFAULT 'NOT_ADDED'",
+        "last_opened_at": "TEXT",
+        "notes": "TEXT",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            cursor.execute(f"ALTER TABLE papers ADD COLUMN {name} {definition}")
+    conn.commit()
 
 def get_existing_ids(conn):
     cursor = conn.cursor()
@@ -28,8 +59,8 @@ def save_paper_to_db(conn, paper_id, info):
     cursor = conn.cursor()
     cursor.execute('''
         INSERT OR IGNORE INTO papers 
-        (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, category, tags, notebook_status, last_opened_at, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         paper_id,
         info.get('title'),
@@ -39,7 +70,12 @@ def save_paper_to_db(conn, paper_id, info):
         info.get('pdf_url'),
         info.get('local_path'),
         info.get('source'),
-        info.get('downloaded_at')
+        info.get('downloaded_at'),
+        info.get('category'),
+        json.dumps(info.get('tags', [])),
+        info.get('notebook_status', 'NOT_ADDED'),
+        info.get('last_opened_at'),
+        info.get('notes')
     ))
     conn.commit()
 
@@ -105,6 +141,7 @@ def download_from_arxiv(config, conn, existing_ids):
                 "pdf_url": result.pdf_url,
                 "local_path": filepath,
                 "source": "arxiv",
+                "category": getattr(result, "primary_category", None),
                 "downloaded_at": datetime.now().isoformat()
             }
             save_paper_to_db(conn, paper_id, info)
@@ -157,6 +194,7 @@ def check_hf_for_agents(config, conn, existing_ids):
                                 "pdf_url": result.pdf_url,
                                 "local_path": filepath,
                                 "source": "hf_trending_arxiv",
+                                "category": getattr(result, "primary_category", None),
                                 "downloaded_at": datetime.now().isoformat()
                             }
                             save_paper_to_db(conn, paper_id, info)
@@ -168,6 +206,7 @@ def check_hf_for_agents(config, conn, existing_ids):
                 info = {
                     "title": title,
                     "summary": summary,
+                    "category": "hf_trending",
                     "source": "hf_trending",
                     "pdf_url": f"https://huggingface.co/papers/{paper_id}",
                     "downloaded_at": datetime.now().isoformat(),
