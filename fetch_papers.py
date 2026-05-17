@@ -4,6 +4,8 @@ import os
 import json
 import yaml
 import sqlite3
+import hashlib
+import re
 from datetime import datetime
 
 def load_config():
@@ -44,10 +46,12 @@ def ensure_schema(conn):
         "notebook_status": "TEXT DEFAULT 'NOT_ADDED'",
         "last_opened_at": "TEXT",
         "notes": "TEXT",
+        "title_hash": "TEXT",
     }
     for name, definition in additions.items():
         if name not in columns:
             cursor.execute(f"ALTER TABLE papers ADD COLUMN {name} {definition}")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_papers_title_hash ON papers(title_hash)")
     conn.commit()
 
 def get_existing_ids(conn):
@@ -55,12 +59,67 @@ def get_existing_ids(conn):
     cursor.execute("SELECT id FROM papers")
     return {row['id'] for row in cursor.fetchall()}
 
+def canonical_arxiv_id(paper_id):
+    if not paper_id:
+        return ""
+    candidate = str(paper_id).strip().split("/")[-1].lower()
+    return re.sub(r"v\d+$", "", candidate)
+
+def normalize_title(title):
+    if not title:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", title.lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+def title_hash(title):
+    normalized = normalize_title(title)
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+def get_existing_paper_keys(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, title_hash FROM papers")
+    keys = {
+        "ids": set(),
+        "canonical_arxiv_ids": set(),
+        "title_hashes": set(),
+    }
+    for row in cursor.fetchall():
+        paper_id = row["id"]
+        keys["ids"].add(paper_id)
+        canonical_id = canonical_arxiv_id(paper_id)
+        if canonical_id:
+            keys["canonical_arxiv_ids"].add(canonical_id)
+        existing_hash = row["title_hash"] or title_hash(row["title"])
+        if existing_hash:
+            keys["title_hashes"].add(existing_hash)
+    return keys
+
+def is_duplicate_paper(paper_id, title, existing_keys):
+    if paper_id in existing_keys["ids"]:
+        return True
+    canonical_id = canonical_arxiv_id(paper_id)
+    if canonical_id and canonical_id in existing_keys["canonical_arxiv_ids"]:
+        return True
+    current_title_hash = title_hash(title)
+    return bool(current_title_hash and current_title_hash in existing_keys["title_hashes"])
+
+def remember_paper(existing_keys, paper_id, title):
+    existing_keys["ids"].add(paper_id)
+    canonical_id = canonical_arxiv_id(paper_id)
+    if canonical_id:
+        existing_keys["canonical_arxiv_ids"].add(canonical_id)
+    current_title_hash = title_hash(title)
+    if current_title_hash:
+        existing_keys["title_hashes"].add(current_title_hash)
+
 def save_paper_to_db(conn, paper_id, info):
     cursor = conn.cursor()
     cursor.execute('''
         INSERT OR IGNORE INTO papers 
-        (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, category, tags, notebook_status, last_opened_at, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, category, tags, notebook_status, last_opened_at, notes, title_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         paper_id,
         info.get('title'),
@@ -75,7 +134,8 @@ def save_paper_to_db(conn, paper_id, info):
         json.dumps(info.get('tags', [])),
         info.get('notebook_status', 'NOT_ADDED'),
         info.get('last_opened_at'),
-        info.get('notes')
+        info.get('notes'),
+        title_hash(info.get('title'))
     ))
     conn.commit()
 
@@ -104,7 +164,7 @@ def download_pdf(url, filepath):
         print(f"Failed to download {url}: {e}")
     return False
 
-def download_from_arxiv(config, conn, existing_ids):
+def download_from_arxiv(config, conn, existing_keys):
     client = arxiv.Client()
     keywords = config['keywords']
     query = " OR ".join([f'all:"{k}"' for k in keywords])
@@ -121,7 +181,7 @@ def download_from_arxiv(config, conn, existing_ids):
     
     for result in client.results(search):
         paper_id = result.entry_id.split("/")[-1]
-        if paper_id in existing_ids:
+        if is_duplicate_paper(paper_id, result.title, existing_keys):
             continue
         
         print(f"Found new arXiv paper: {result.title}")
@@ -145,14 +205,14 @@ def download_from_arxiv(config, conn, existing_ids):
                 "downloaded_at": datetime.now().isoformat()
             }
             save_paper_to_db(conn, paper_id, info)
-            existing_ids.add(paper_id)
+            remember_paper(existing_keys, paper_id, result.title)
             download_count += 1
         else:
             print(f"Skipping log for {paper_id} due to download failure.")
         
     return download_count
 
-def check_hf_for_agents(config, conn, existing_ids):
+def check_hf_for_agents(config, conn, existing_keys):
     hf_papers = fetch_hf_daily_papers()
     keywords = [k.lower() for k in config['keywords']]
     download_count = 0
@@ -165,7 +225,7 @@ def check_hf_for_agents(config, conn, existing_ids):
         summary = paper.get('summary', "")
         paper_id = paper.get('id', "")
         
-        if not paper_id or paper_id in existing_ids:
+        if not paper_id or is_duplicate_paper(paper_id, title, existing_keys):
             continue
             
         # Check if title or summary contains keywords
@@ -180,6 +240,9 @@ def check_hf_for_agents(config, conn, existing_ids):
                     results = list(client.results(search))
                     if results:
                         result = results[0]
+                        arxiv_paper_id = result.entry_id.split("/")[-1]
+                        if is_duplicate_paper(arxiv_paper_id, result.title, existing_keys):
+                            continue
                         safe_title = sanitize_filename(result.title)
                         filename = f"{safe_title}.pdf"
                         filepath = os.path.join(download_dir, filename)
@@ -197,8 +260,8 @@ def check_hf_for_agents(config, conn, existing_ids):
                                 "category": getattr(result, "primary_category", None),
                                 "downloaded_at": datetime.now().isoformat()
                             }
-                            save_paper_to_db(conn, paper_id, info)
-                            existing_ids.add(paper_id)
+                            save_paper_to_db(conn, arxiv_paper_id, info)
+                            remember_paper(existing_keys, arxiv_paper_id, result.title)
                             download_count += 1
                 except Exception as e:
                     print(f"Could not download HF paper {paper_id} via arXiv: {e}")
@@ -213,17 +276,17 @@ def check_hf_for_agents(config, conn, existing_ids):
                     "note": "PDF not downloaded automatically"
                 }
                 save_paper_to_db(conn, paper_id, info)
-                existing_ids.add(paper_id)
+                remember_paper(existing_keys, paper_id, title)
     return download_count
 
 def main():
     config = load_config()
     conn = get_db_connection()
-    existing_ids = get_existing_ids(conn)
+    existing_keys = get_existing_paper_keys(conn)
     
     print("Checking for new papers...")
-    arxiv_count = download_from_arxiv(config, conn, existing_ids)
-    hf_count = check_hf_for_agents(config, conn, existing_ids)
+    arxiv_count = download_from_arxiv(config, conn, existing_keys)
+    hf_count = check_hf_for_agents(config, conn, existing_keys)
     
     conn.close()
     print(f"Done! Downloaded {arxiv_count} from arXiv and found {hf_count} from HF.")

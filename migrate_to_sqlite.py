@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+from fetch_papers import title_hash
 
 def migrate():
     json_file = 'downloaded_papers.json'
@@ -31,7 +32,8 @@ def migrate():
             tags TEXT DEFAULT '[]',
             notebook_status TEXT DEFAULT 'NOT_ADDED',
             last_opened_at TEXT,
-            notes TEXT
+            notes TEXT,
+            title_hash TEXT
         )
     ''')
 
@@ -45,8 +47,8 @@ def migrate():
         try:
             cursor.execute('''
                 INSERT OR IGNORE INTO papers 
-                (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, status, category, tags, notebook_status, last_opened_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, title, authors, published, summary, pdf_url, local_path, source, downloaded_at, status, category, tags, notebook_status, last_opened_at, notes, title_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 paper_id,
                 info.get('title'),
@@ -62,7 +64,8 @@ def migrate():
                 json.dumps(info.get('tags', [])),
                 info.get('notebook_status', 'NOT_ADDED'),
                 info.get('last_opened_at'),
-                info.get('notes')
+                info.get('notes'),
+                title_hash(info.get('title'))
             ))
             count += 1
         except Exception as e:
