@@ -40,3 +40,5 @@ ui/.npm_cache/
 ui/.vite/
 ui/out/
 ui/release/
+ui/test-results/
+ui/playwright-report/
